@@ -1,0 +1,241 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1">
+<title>ESP32 Motor & Temperature</title>
+
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+
+<style>
+body {
+  font-family: -apple-system, sans-serif;
+  background: #f1f4f8;
+  text-align: center;
+  padding: 24px 14px;
+}
+.panel {
+  max-width: 380px;
+  margin: auto;
+  background: white;
+  padding: 24px 18px;
+  border-radius: 18px;
+  box-shadow: 0 3px 15px #0002;
+}
+.temp {
+  background: #e8f3ff;
+  border-radius: 14px;
+  padding: 20px;
+  margin: 20px 0;
+}
+#temperature {
+  font-size: 46px;
+  font-weight: bold;
+  color: #185a9d;
+}
+#tempStatus, #connection {
+  color: #666;
+  font-size: 14px;
+}
+#status {
+  font-size: 23px;
+  font-weight: bold;
+  margin: 20px 0;
+}
+button {
+  width: 95%;
+  padding: 20px;
+  margin: 8px auto;
+  display: block;
+  border: none;
+  border-radius: 12px;
+  color: white;
+  font-size: 21px;
+  font-weight: bold;
+}
+.low { background: #287dc4; }
+.high { background: #219653; }
+.stop { background: #dc4545; }
+button:disabled { opacity: 0.45; }
+</style>
+</head>
+
+<body>
+<div class="panel">
+
+<h2>ESP32 Control</h2>
+<p id="connection">MQTT接続中...</p>
+
+<div class="temp">
+  <h3>現在の温度</h3>
+  <div id="temperature">--.- ℃</div>
+  <div id="tempStatus">受信待ち</div>
+</div>
+
+<h3>モーター制御</h3>
+<div id="status">停止中</div>
+
+<button class="low" onclick="control('LOW')" disabled>
+  低速回転
+</button>
+
+<button class="high" onclick="control('HIGH')" disabled>
+  高速回転
+</button>
+
+<button class="stop" onclick="control('STOP')" disabled>
+  停止
+</button>
+
+</div>
+
+<script>
+// ===== MQTT設定 =====
+const broker = "wss://broker.emqx.io:8084/mqtt";
+
+const topicMotor =
+  "esp32/demo/nittY5C4IoItest/motor/control";
+
+const topicTemp =
+  "esp32/demo/nittY5C4IoItest/temperature";
+
+const clientId =
+  "iphone-" + Math.random().toString(16).slice(2);
+
+let command = "STOP";
+let lastTempTime = 0;
+
+const client = mqtt.connect(broker, {
+  clientId: clientId,
+  clean: true,
+  reconnectPeriod: 2000,
+  connectTimeout: 10000
+});
+
+function setConnected(connected) {
+  document.getElementById("connection").innerText =
+    connected ? "MQTT接続済み" : "MQTT切断中";
+
+  document.querySelectorAll("button").forEach(b => {
+    b.disabled = !connected;
+  });
+}
+
+// ===== MQTT接続成功 =====
+client.on("connect", () => {
+
+  setConnected(true);
+
+  // 温度トピックを購読
+  client.subscribe(topicTemp, { qos: 0 });
+
+  // 再接続時は停止指令
+  command = "STOP";
+  sendCommand("STOP");
+
+  document.getElementById("status").innerText =
+    "停止指令";
+});
+
+// ===== 温度データ受信 =====
+client.on("message", (topic, payload) => {
+
+  if (topic === topicTemp) {
+
+    const temperature =
+      Number(payload.toString());
+
+    if (Number.isFinite(temperature)) {
+
+      document.getElementById("temperature").innerText =
+        temperature.toFixed(1) + " ℃";
+
+      document.getElementById("tempStatus").innerText =
+        "更新済み";
+
+      lastTempTime = Date.now();
+    }
+  }
+});
+
+// ===== 切断 =====
+client.on("close", () => {
+  setConnected(false);
+  command = "STOP";
+
+  document.getElementById("status").innerText =
+    "通信切断";
+});
+
+client.on("error", error => {
+  console.log("MQTT error:", error);
+});
+
+// ===== モーター指令送信 =====
+function sendCommand(value) {
+  if (!client.connected) return;
+
+  client.publish(topicMotor, value, {
+    qos: 0,
+    retain: false
+  });
+}
+
+// ===== ボタン操作 =====
+function control(value) {
+  if (!client.connected) return;
+
+  command = value;
+
+  if (value === "LOW") {
+    document.getElementById("status").innerText =
+      "低速回転指令";
+  }
+  else if (value === "HIGH") {
+    document.getElementById("status").innerText =
+      "高速回転指令";
+  }
+  else {
+    document.getElementById("status").innerText =
+      "停止指令";
+  }
+
+  sendCommand(value);
+}
+
+// ===== 定期処理 =====
+setInterval(() => {
+
+  // モーター指令を1秒ごとに再送信
+  if (command !== "STOP" && client.connected) {
+    sendCommand(command);
+  }
+
+  // 温度データの鮮度を確認
+  if (Date.now() - lastTempTime > 10000) {
+    document.getElementById("temperature").innerText =
+      "--.- ℃";
+
+    document.getElementById("tempStatus").innerText =
+      "温度データ受信待ち";
+  }
+
+}, 1000);
+
+// Safariから離れるときは停止を試みる
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    command = "STOP";
+    sendCommand("STOP");
+  }
+});
+
+window.addEventListener("pagehide", () => {
+  command = "STOP";
+  sendCommand("STOP");
+});
+</script>
+</body>
+</html>
